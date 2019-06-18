@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-with open('README.md', 'rb') as f:
+with open('README.md', 'rt') as f:
     long_description = f.read()
 
 setup(
@@ -15,6 +15,9 @@ setup(
     packages=find_packages(),
     install_requires=[],
     setup_requires=['wheel'],
+    entry_points={
+        "console_scripts": ['rjob = rjob.__main__:main']
+    },
     classifiers=[
         'Programming Language :: Python :: 3.5',
         'Operating System :: POSIX',

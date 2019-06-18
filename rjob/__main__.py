@@ -64,7 +64,7 @@ async def status(args):
         print(status.ljust(10, ' '), deployment.server)
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description='dummy remote task executor')
     commands = parser.add_subparsers()
 
@@ -95,3 +95,7 @@ if __name__ == '__main__':
     if hasattr(args, 'func'):
         task = args.func(args)
         asyncio.get_event_loop().run_until_complete(task)
+
+
+if __name__ == '__main__':
+    main()

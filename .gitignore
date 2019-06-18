@@ -1,3 +1,5 @@
 venv
 complete
 .idea/*
+*.egg-info
+dist
