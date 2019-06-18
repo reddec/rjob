@@ -37,6 +37,7 @@ class Deployment(NamedTuple):
     server: str
     server_user: str
     command: str  # {dir} - deployed directory
+    install: str = ''
     local_directory: str = '.'
     remote_directory: Optional[str] = None
     result_directory: str = 'done'
@@ -69,6 +70,10 @@ class Deployment(NamedTuple):
         # create target dir
         log.info("create remote dir %s", self.deploy_dir)
         await self.exec_remote('mkdir', '-p', self.deploy_dir)
+        await self.patch(deployment_index, total_deployments)
+
+    async def patch(self, deployment_index: int = 0, total_deployments: int = 1):
+        log = logging.getLogger(self.name + "-" + self.server)
         # check .jobignore file
         rsync = ['rsync', '-avz']
         if os.path.exists('.jobignore'):
@@ -83,6 +88,9 @@ class Deployment(NamedTuple):
         binary = await self.call_remote('which', parts[0])
         log.info("binary %s resolved as %s", parts[0], binary)
         exec = " ".join([binary] + parts[1:])
+        # install dependencies if required
+        if self.install != '':
+            await self.exec_remote('cd', self.deploy_dir, '&&', self.install)
         # create systemd unit file
         environ = [
             "Environment=RESULT=" + self.result_directory,
@@ -170,6 +178,7 @@ class Project(NamedTuple):
     name: str
     servers: Tuple[str, ...]
     command: str
+    install: str = ''
 
     def generate_deployments(self):
         ans = []
@@ -180,6 +189,7 @@ class Project(NamedTuple):
                 server=server,
                 server_user=user,
                 command=self.command,
+                install=self.install,
             ))
         return ans
 
@@ -188,6 +198,15 @@ class Project(NamedTuple):
         tasks = []
         for idx, deployment in enumerate(deployments):
             task = deployment.deploy(idx, len(deployments))
+            tasks.append(task)
+
+        await asyncio.gather(*tasks)
+
+    async def patch(self):
+        deployments = self.generate_deployments()
+        tasks = []
+        for idx, deployment in enumerate(deployments):
+            task = deployment.patch(idx, len(deployments))
             tasks.append(task)
 
         await asyncio.gather(*tasks)
@@ -259,11 +278,13 @@ class Project(NamedTuple):
             name=data['name'],
             command=data['command'],
             servers=data.get('servers', []),
+            install=data.get('install', '')
         )
 
     def to_dict(self) -> dict:
         return {
             'name': self.name,
             'command': self.command,
-            'servers': self.servers
+            'servers': self.servers,
+            'install': self.install,
         }

@@ -37,6 +37,11 @@ async def deploy(args):
     await project.deploy()
 
 
+async def patch(args):
+    project = Project.load()
+    await project.patch()
+
+
 async def start(args):
     project = Project.load()
     await project.start()
@@ -73,6 +78,9 @@ def main():
 
     deploy_cmd = commands.add_parser('deploy', help='deploy project to servers but not start')
     deploy_cmd.set_defaults(func=deploy)
+
+    patch_cmd = commands.add_parser('patch', help='patch (diff only) project to servers but not start')
+    patch_cmd.set_defaults(func=patch)
 
     start_cmd = commands.add_parser('start', help='start processes on all servers')
     start_cmd.set_defaults(func=start)
