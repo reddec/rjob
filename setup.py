@@ -5,7 +5,7 @@ with open('README.md', 'rt') as f:
 
 setup(
     name='rjob',
-    version='1.1',
+    version='1.2',
     author='Baryshnikov Aleksandr (reddec)',
     author_email='owner@reddec.net',
     description='Dummy simple remote task executor',

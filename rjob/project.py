@@ -3,7 +3,9 @@ import json
 import logging
 import os
 from tempfile import NamedTemporaryFile, TemporaryDirectory
-from typing import NamedTuple, Optional, Tuple
+from typing import NamedTuple, Optional, Tuple, Dict
+
+from .supervisor import get_supervisor
 
 _unit_file = """[Unit]
 Description=JOB one-shot service
@@ -37,12 +39,19 @@ class Deployment(NamedTuple):
     server: str
     server_user: str
     command: str  # {dir} - deployed directory
+    supervisor_name: str
+    environment: Dict[str, str] = {}
     install: str = ''
     local_directory: str = '.'
     remote_directory: Optional[str] = None
     result_directory: str = 'done'
     log_file: str = '.log'
     name_prefix: str = "job-"
+    debug: bool = False
+
+    @property
+    def supervisor(self):
+        return get_supervisor(self.supervisor_name, self)
 
     @property
     def deploy_dir(self):
@@ -59,8 +68,8 @@ class Deployment(NamedTuple):
         return self.server_user + '@' + self.server
 
     @property
-    def service_name(self):
-        return self.name_prefix + self.name + ".service"
+    def log_path(self):
+        return self.remote_abs(self.log_file)
 
     async def deploy(self, deployment_index: int = 0, total_deployments: int = 1):
         log = logging.getLogger(self.name + "-" + self.server)
@@ -82,50 +91,26 @@ class Deployment(NamedTuple):
         # call rsync
         log.info("synchronizing current dir to %s", self.deploy_dir)
         await self.exec_local(*rsync)
-        # validate executable
-        parts = list(self.command.split(' '))
-        log.info("resolving binary %s", parts[0])
-        binary = await self.call_remote('which', parts[0])
-        log.info("binary %s resolved as %s", parts[0], binary)
-        exec = " ".join([binary] + parts[1:])
         # install dependencies if required
         if self.install != '':
             await self.exec_remote('cd', self.deploy_dir, '&&', self.install)
-        # create systemd unit file
-        environ = [
-            "Environment=RESULT=" + self.result_directory,
-            "Environment=DEPLOYMENT_NUM=" + str(total_deployments),
-            "Environment=DEPLOYMENT_INDEX=" + str(deployment_index)
-        ]
-        unit = _unit_file.format(
-            wd=self.deploy_dir,
-            exec=exec,
-            done=self.result_directory,
-            logs=self.remote_abs(self.log_file),
-            envs="\n".join(environ),
-        )
-        # write to system files and disable (do not enable)
-        log.info("creating %s", self.service_name)
-        await self.push_file("/etc/systemd/system/" + self.service_name, unit)
-        log.info("reloading daemons")
-        await self.exec_remote('systemctl', 'daemon-reload')
 
     async def start(self):
         log = logging.getLogger(self.name + "-" + self.server)
         # stop
         await self.stop()
         # start service
-        log.info("starting service %s", self.service_name)
-        await self.exec_remote('systemctl', 'start', self.service_name)
+        log.info("starting service %s", self.name)
+        await self.exec_on_machine(self.supervisor.start())
 
     async def status(self):
-        status = await self.call_remote('systemctl', 'show', '-p', 'SubState', '--value', self.service_name)
-        return status
+        status = await self.exec_on_machine(self.supervisor.status())
+        return status.splitlines()[-1]
 
     async def stop(self):
         log = logging.getLogger(self.name + "-" + self.server)
-        log.info("stopping service %s", self.service_name)
-        await self.exec_remote('systemctl', 'stop', self.service_name)
+        log.info("stopping service %s", self.name)
+        await self.exec_on_machine(self.supervisor.stop())
 
     async def collect(self, to: str):
         log = logging.getLogger(self.name + "-" + self.server)
@@ -145,16 +130,18 @@ class Deployment(NamedTuple):
                     yield line.strip()
 
     async def exec_remote(self, *args):
-        ssh = [self.destination] + list(args)
-        proc = await asyncio.create_subprocess_exec('ssh', *ssh)
-        await proc.wait()
-        assert proc.returncode == 0, " ".join(args)
+        return await self.exec_on_machine(" ".join(repr(arg) for arg in args))
 
-    async def call_remote(self, *args):
-        ssh = [self.destination] + list(args)
-        proc = await asyncio.create_subprocess_exec('ssh', *ssh, stdout=asyncio.subprocess.PIPE)
-        stdout, stderr = await proc.communicate()
-        assert proc.returncode == 0, " ".join(args)
+    async def exec_on_machine(self, command: str):
+        if self.debug:
+            print("# on", self.server)
+            print(command)
+            print("")
+        proc = await asyncio.create_subprocess_exec('ssh', '-T', self.destination,
+                                                    stdin=asyncio.subprocess.PIPE,
+                                                    stdout=asyncio.subprocess.PIPE)
+        stdout, stderr = await proc.communicate(command.encode())
+        assert proc.returncode == 0, self.server + ": " + command
         return stdout.decode().strip()
 
     async def push_file(self, destination, content):
@@ -165,6 +152,10 @@ class Deployment(NamedTuple):
             await self.exec_local(*rsync)
 
     async def exec_local(self, *args):
+        if self.debug:
+            print("# on local machine")
+            print(*args)
+            print("")
         proc = await asyncio.create_subprocess_exec(*args)
         await proc.wait()
         assert proc.returncode == 0, " ".join(args)
@@ -179,6 +170,8 @@ class Project(NamedTuple):
     servers: Tuple[str, ...]
     command: str
     install: str = ''
+    supervisor: str = 'basic'  # basic|systemd
+    debug: bool = False
 
     def generate_deployments(self):
         ans = []
@@ -190,6 +183,8 @@ class Project(NamedTuple):
                 server_user=user,
                 command=self.command,
                 install=self.install,
+                supervisor_name=self.supervisor,
+                debug=self.debug,
             ))
         return ans
 
@@ -268,17 +263,19 @@ class Project(NamedTuple):
         return complete
 
     @staticmethod
-    def load(file: str = 'deploy.json') -> 'Project':
+    def load(file: str = 'deploy.json', debug: bool = False) -> 'Project':
         with open(file, 'rt') as f:
-            return Project.from_dict(json.load(f))
+            return Project.from_dict(json.load(f), debug)
 
     @staticmethod
-    def from_dict(data: dict) -> 'Project':
+    def from_dict(data: dict, debug: bool = False) -> 'Project':
         return Project(
             name=data['name'],
             command=data['command'],
             servers=data.get('servers', []),
-            install=data.get('install', '')
+            install=data.get('install', ''),
+            supervisor=data.get('supervisor', 'basic'),
+            debug=debug
         )
 
     def to_dict(self) -> dict:
@@ -287,4 +284,5 @@ class Project(NamedTuple):
             'command': self.command,
             'servers': self.servers,
             'install': self.install,
+            'supervisor': self.supervisor,
         }

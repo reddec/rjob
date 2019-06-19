@@ -33,37 +33,37 @@ complete
 
 
 async def deploy(args):
-    project = Project.load()
+    project = Project.load(debug=args.debug)
     await project.deploy()
 
 
 async def patch(args):
-    project = Project.load()
+    project = Project.load(debug=args.debug)
     await project.patch()
 
 
 async def start(args):
-    project = Project.load()
+    project = Project.load(debug=args.debug)
     await project.start()
 
 
 async def stop(args):
-    project = Project.load()
+    project = Project.load(debug=args.debug)
     await project.stop()
 
 
 async def wait(args):
-    project = Project.load()
+    project = Project.load(debug=args.debug)
     await project.wait()
 
 
 async def gather(args):
-    project = Project.load()
+    project = Project.load(debug=args.debug)
     await project.collect()
 
 
 async def status(args):
-    project = Project.load()
+    project = Project.load(debug=args.debug)
     statuses = await project.statuses()
     for (deployment, status) in statuses:
         print(status.ljust(10, ' '), deployment.server)
@@ -71,6 +71,9 @@ async def status(args):
 
 def main():
     parser = argparse.ArgumentParser(description='dummy remote task executor')
+    parser.add_argument('--debug', dest='debug', action='store_true', help="show commands during execution")
+    parser.set_defaults(debug=False)
+
     commands = parser.add_subparsers()
 
     init_cmd = commands.add_parser('init', help='initialize new project in the directory')
